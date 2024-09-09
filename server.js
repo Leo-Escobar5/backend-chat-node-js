@@ -4,7 +4,8 @@ const http = require("http");
 const socketIo = require("socket.io");
 const morgan = require("morgan");
 const cors = require("cors");
-const cron = require("node-cron"); // Importar node-cron
+const cron = require("node-cron");
+const jwt = require("jsonwebtoken"); // Para verificar el JWT
 
 // Crear la aplicación Express
 const app = express();
@@ -15,6 +16,9 @@ const io = socketIo(server, {
     methods: ["GET", "POST"],
   },
 });
+
+// Secret key (debe ser la misma que usas en .NET)
+const secretKey = "clave_de_prueba_super_secreta_12345";
 
 // Objeto para almacenar los mensajes por sala
 const roomMessages = {
@@ -71,9 +75,26 @@ cron.schedule("0 1 * * *", () => {
   io.emit("roomsReset", "Las salas han sido reiniciadas a las 1 a.m."); // Notificar a todos los usuarios
 });
 
+// Middleware para verificar el JWT en las conexiones Socket.IO
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token; // Obtener el token del handshake
+  if (!token) {
+    return next(new Error("Autenticación requerida")); // Si no hay token, rechazar
+  }
+
+  jwt.verify(token, secretKey, (err, decoded) => {
+    if (err) {
+      return next(new Error("Token inválido")); // Si el token es inválido, rechazar
+    }
+    // Si el token es válido, añadimos la info del usuario al socket
+    socket.user = decoded;
+    next();
+  });
+});
+
 // Configurar el Socket.IO
 io.on("connection", (socket) => {
-  console.log("Usuario conectado");
+  console.log(`Usuario autenticado: ${socket.user.name}`);
 
   // Manejar la unión a una sala específica con nombre e ID
   socket.on("joinRoom", ({ room, name, userId }) => {
