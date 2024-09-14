@@ -7,6 +7,11 @@ const cors = require("cors");
 const cron = require("node-cron");
 const jwt = require("jsonwebtoken"); // Para verificar el JWT
 
+// Claves y configuraciones para JWT
+const secretKey = "clave_de_prueba_super_secreta_12345"; //misma que en .net
+const issuer = "https://[2806:2f0:6020:d4f8::656]:7152";
+const audience = "https://[2806:2f0:6020:d4f8::656]:7152";
+
 // Crear la aplicación Express
 const app = express();
 const server = http.createServer(app);
@@ -16,9 +21,6 @@ const io = socketIo(server, {
     methods: ["GET", "POST"],
   },
 });
-
-// Secret key (debe ser la misma que usas en .NET)
-const secretKey = "clave_de_prueba_super_secreta_12345";
 
 // Objeto para almacenar los mensajes por sala
 const roomMessages = {
@@ -72,43 +74,67 @@ function resetRooms() {
 // Configurar una tarea cron para reiniciar las salas a la 1 a.m. todos los días
 cron.schedule("0 1 * * *", () => {
   resetRooms();
-  io.emit("roomsReset", "Las salas han sido reiniciadas a las 1 a.m."); // Notificar a todos los usuarios
+  io.emit("roomsReset", "Las salas han sido reiniciadas a la 1 a.m."); // Notificar a todos los usuarios
 });
 
 // Middleware para verificar el JWT en las conexiones Socket.IO
 io.use((socket, next) => {
   const token = socket.handshake.auth.token; // Obtener el token del handshake
   if (!token) {
+    console.error("No se proporcionó token en la conexión de Socket.IO");
     return next(new Error("Autenticación requerida")); // Si no hay token, rechazar
   }
 
-  jwt.verify(token, secretKey, (err, decoded) => {
-    if (err) {
-      return next(new Error("Token inválido")); // Si el token es inválido, rechazar
+  console.log("Token recibido:", token); // Log del token recibido
+
+  // Verificar el token JWT
+  jwt.verify(
+    token,
+    secretKey,
+    {
+      algorithms: ["HS256"], // Asegurar que el algoritmo sea HS256
+      issuer: issuer, // Especificar el issuer
+      audience: audience, // Especificar el audience
+    },
+    (err, decoded) => {
+      if (err) {
+        console.error("Error al verificar el token:", err);
+        return next(new Error("Token inválido")); // Si el token es inválido, rechazar
+      }
+      // Si el token es válido, añadimos la info del usuario al socket
+      console.log(
+        "Token verificado correctamente. Datos decodificados:",
+        decoded
+      );
+      socket.user = decoded;
+      next();
     }
-    // Si el token es válido, añadimos la info del usuario al socket
-    socket.user = decoded;
-    next();
-  });
+  );
 });
 
 // Configurar el Socket.IO
 io.on("connection", (socket) => {
-  console.log(`Usuario autenticado: ${socket.user.name}`);
+  console.log(
+    `Usuario autenticado: ${
+      socket.user.email || socket.user.name || "Desconocido"
+    }`
+  ); // Usar el claim adecuado
 
   // Manejar la unión a una sala específica con nombre e ID
   socket.on("joinRoom", ({ room, name, userId }) => {
     socket.join(room);
-    console.log(`${name} se unió a la sala: ${room}`);
+    console.log(`Usuario ${name} (ID: ${userId}) se unió a la sala: ${room}`);
 
     // Agregar el usuario a la sala
     roomUsers[room].push({ userId, name });
 
     // Emitir la lista de usuarios actualizada a todos en la sala
     io.to(room).emit("roomUsers", roomUsers[room]);
+    console.log(`Usuarios en la sala ${room}:`, roomUsers[room]);
 
     // Cargar los mensajes anteriores de la sala
     socket.emit("loadMessages", roomMessages[room]);
+    console.log(`Mensajes cargados para el usuario ${name} en la sala ${room}`);
   });
 
   // Escuchar por eventos de mensaje con nombre y mensaje
@@ -117,6 +143,7 @@ io.on("connection", (socket) => {
     const newMessage = { name, message };
     roomMessages[room].push(newMessage); // Guardar el mensaje en la sala correspondiente
     io.to(room).emit("mensaje", newMessage); // Reenviar el mensaje solo a la sala correspondiente
+    console.log(`Mensaje enviado en la sala ${room} por ${name}: ${message}`);
   });
 
   // Manejar cuando el usuario abandona la sala
@@ -126,6 +153,7 @@ io.on("connection", (socket) => {
     socket.leave(room);
     socket.emit("userLeft", `Has abandonado la sala ${room}`);
     console.log(`Usuario con ID ${userId} ha abandonado la sala ${room}`);
+    console.log(`Usuarios restantes en la sala ${room}:`, roomUsers[room]);
   });
 
   // Manejar la desconexión
@@ -148,9 +176,16 @@ io.on("connection", (socket) => {
 
     if (userRoom) {
       console.log(`${userName} se ha desconectado de la sala: ${userRoom}`);
-
       // Emitir la lista de usuarios actualizada a todos en la sala
       io.to(userRoom).emit("roomUsers", roomUsers[userRoom]);
+      console.log(
+        `Usuarios restantes en la sala ${userRoom}:`,
+        roomUsers[userRoom]
+      );
+    } else {
+      console.log(
+        `Un usuario se ha desconectado sin estar en una sala activa.`
+      );
     }
   });
 });
